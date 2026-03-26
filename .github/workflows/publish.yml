@@ -1,4 +1,4 @@
-name: Validate Release
+name: Publish to Marketplace
 
 on:
   push:
@@ -6,13 +6,14 @@ on:
       - 'v*'
 
 jobs:
-  validate:
+  publish:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Validate tag matches plugin.json
+      - name: Extract version and validate
+        id: meta
         run: |
           VERSION="${GITHUB_REF_NAME#v}"
           PLUGIN_VERSION=$(jq -r '.version' .claude-plugin/plugin.json)
@@ -20,4 +21,25 @@ jobs:
             echo "::error::Tag version (${VERSION}) does not match plugin.json (${PLUGIN_VERSION})"
             exit 1
           fi
-          echo "✅ v${VERSION} validated — marketplace will auto-sync within 30 minutes"
+          echo "version=${VERSION}" >> "$GITHUB_OUTPUT"
+          echo "sha=${GITHUB_SHA}" >> "$GITHUB_OUTPUT"
+
+      - name: Generate App token
+        id: app-token
+        uses: actions/create-github-app-token@v1
+        with:
+          app-id: ${{ secrets.APP_ID }}
+          private-key: ${{ secrets.APP_PRIVATE_KEY }}
+          owner: ClaudeWorksHub
+          repositories: claude-plugins
+
+      - name: Trigger marketplace update
+        run: |
+          gh api repos/ClaudeWorksHub/claude-plugins/dispatches \
+            -f event_type=plugin-update \
+            -f "client_payload[plugin]=agora" \
+            -f "client_payload[version]=${{ steps.meta.outputs.version }}" \
+            -f "client_payload[sha]=${{ steps.meta.outputs.sha }}"
+          echo "✅ Dispatched plugin-update for agora v${{ steps.meta.outputs.version }}"
+        env:
+          GH_TOKEN: ${{ steps.app-token.outputs.token }}
