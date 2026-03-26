@@ -1,14 +1,14 @@
 ---
 description: Launch Agora — multi-role AI debate to generate high-quality proposals
-argument-hint: "<task description> [--roles athena,momus] [--exclude hephaestus] [--max-rounds 10]"
-allowed-tools: [Read, Write, Edit, Glob, Grep, Agent, Bash]
+argument-hint: "<task description> [--roles athena,momus] [--exclude hephaestus] [--max-rounds 10] [--interactive]"
+allowed-tools: [Read, Write, Edit, Glob, Grep, Agent, Bash, AskUserQuestion]
 ---
 
 # Agora — Multi-Role AI Debate for Proposals
 
 You are the orchestrator of Agora. Your job is to organize multiple AI roles to debate a proposal through multiple rounds until consensus is reached.
 
-**Your role: rational defender of the proposal.** Don't accept objections wholesale — you must give reasons for accepting or rejecting each one. When rejecting, explain why the current proposal is better. When accepting, explain what changes to make and their scope.
+**Your role: rational steward of the proposal.** You defend what works, accept what improves, and reject what weakens — with explicit reasoning for every decision.
 
 **Important: convergence is a purely structural rule** — you may only converge when ALL active roles have status "No objection". You cannot unilaterally declare convergence. The raw status line from each role's response must be preserved verbatim in the discussion file for auditing.
 
@@ -27,8 +27,9 @@ User input: $ARGUMENTS
 
 Parse arguments (prompt-based, lenient parsing):
 - `--roles`: specify a subset of roles (comma or space separated). Example: `--roles athena,momus`
-- `--exclude`: exclude specific roles; all others participate
+- `--exclude`: exclude specific roles; all others participate. Mutually exclusive with `--roles` — if both are specified, error: "⚠️ --roles and --exclude cannot be used together"
 - `--max-rounds`: max discussion rounds (default 10, max 20)
+- `--interactive` (or `-i`): enable interactive mode — pause after each round of agent feedback to let the user provide input before the orchestrator responds
 - `--resume <file>`: resume a previously interrupted discussion (see Resume section below)
 - `--roles=athena,momus` (equals sign) is also valid
 - Typo tolerance: `hephae stus` → matches `hephaestus`
@@ -65,6 +66,7 @@ Show auto-selection reasoning in the confirmation prompt so the user can overrid
 📋 Task: <task description>
 👥 Roles: <emoji+role name list> (N opus roles) {if auto-selected: "[auto: <complexity level>]"}
 🔄 Max rounds: M
+{if interactive: "🤝 Interactive mode: ON — you can provide input after each round"}
 ⚠️ Estimated N×M opus Agent calls + orchestration overhead
 {if auto-selected Medium: "💡 如需可行性评估，可添加 --roles 包含 hephaestus"}
 
@@ -95,15 +97,15 @@ When `--resume <file>` is provided (file can be either the discussion `.md` or t
      2. If complete: parse `current_round` from the discussion file, extract each role's status from `**Status: {status}**` lines. Set all other fields to conservative defaults: `consecutive_no_objection=0`, `sleeping=false`, `proposal_modified=true`.
    - Write the corrected state back to the state file.
 
-4. **Restore context**: read the last 2 rounds from the discussion file (find `## Round N` markers). Extract the latest complete proposal from the most recent `**Updated proposal:**` section.
+5. **Restore context**: read the last 2 rounds from the discussion file (find `## Round N` markers). Extract the latest complete proposal from the most recent `**Updated proposal:**` section.
 
-5. **Inject decision_log**: from the state file, prepare decision history for the orchestrator context:
+6. **Inject decision_log**: from the state file, prepare decision history for the orchestrator context:
    - Last 3 rounds: include full entries (round, role, issue, decision, summary)
    - Older entries: include round, role, issue, decision only (summary omitted), aggregated by role
 
-6. **Resume Debate**: set `round = state.current_round + 1` and enter the Debate loop.
+7. **Resume Debate**: set `round = state.current_round + 1` and enter the Debate loop. **The first round after resume, all roles MUST be active (no hibernation allowed)**, regardless of their `consecutive_no_objection` or `sleeping` state — to ensure all roles have sufficient context before potentially entering sleep.
 
-7. **Output resume status**:
+8. **Output resume status**:
 ```
 🔄 Resuming discussion from Round {N}
 📄 Discussion file: {file path}
@@ -155,6 +157,7 @@ Initial files:
 ```json
 {
   "phase": "init",
+  "interactive": false,
   "assessment_completed_roles": [],
   "current_round": 0,
   "consecutive_no_objection": 0,
@@ -166,8 +169,13 @@ Initial files:
       "consecutive_no_objection": 0,
       "sleeping": false,
       "last_reviewed_version": 0,
-      "sleep_since_round": null
+      "sleep_since_round": null,
+      "consecutive_failures": 0
     }
+  },
+  "metrics": {
+    "agent_calls": 0,
+    "sleeping_rounds_saved": 0
   },
   "unresolved_issues": [],
   "decision_log": []
@@ -250,7 +258,7 @@ You may freely use markdown headings to organize your output. This phase does NO
 
 **5. Write v2 as Round 1:** Append the synthesized v2 proposal to the discussion file as `## Round 1 / ### 💡 Claude:`.
 
-**6. Update state:** Set `"phase": "debate"`, update `assessment_completed_roles` to include all completed roles. Write state file **after** writing the discussion file.
+**6. Update state:** Set `"phase": "debate"`, `"current_round": 1`, update `assessment_completed_roles` to include all completed roles. Write state file **after** writing the discussion file.
 
 **Error handling:**
 - Agent call fails → retry once
@@ -366,9 +374,40 @@ b) **Write to discussion file** using the Edit tool to append at the end of the 
 **Summary:** {summary}
 ```
 
+**Step 1.8 — User input (interactive mode only)**
+
+Skip this step if `--interactive` was not specified.
+
+After all role responses have been written to the discussion file, pause to collect user input:
+
+a) Output a brief summary of this round's agent feedback:
+```
+📋 Round {N} agent feedback:
+{for each active role: - emoji role_name: status — summary}
+```
+
+b) Use AskUserQuestion to ask: "本轮 agent 反馈已完成，是否需要补充意见？" with options:
+   - "继续" (description: "直接进入下一步，由 orchestrator 回应")
+   - "我有补充" (description: "输入你的意见或约束条件，会作为额外上下文纳入讨论")
+
+c) If user selects "继续" → proceed to Step 2 normally.
+
+d) If user selects "我有补充" or provides custom text → treat user input as a **stakeholder directive**:
+   - Append to discussion file:
+     ```
+     ### 👤 User:
+     {user input text}
+     ```
+   - In Step 2, the orchestrator MUST address user input alongside agent objections. User directives take priority over agent suggestions when they conflict — the user is the ultimate decision maker.
+   - Include user input in the next round's agent prompt under a new section:
+     ```
+     ## User Directive (Round {N})
+     {user input text}
+     ```
+
 **Step 2 — Main Claude responds and updates**
 
-After all role responses have been written:
+After all role responses have been written (and user input collected if in interactive mode):
 
 a) Respond to each objection one by one (accept/reject with reasoning), and revise the proposal. Note:
    - If the same objection appeared in a previous round → mark "Already addressed in Round N" and reference the prior response
@@ -406,6 +445,7 @@ d) **Update the state file** (`proposal-<timestamp>.state.json`) using the Write
      - `sleep_since_round`: set to current round when entering sleep, null when awake
    - `unresolved_issues` array (accepted → resolved, rejected → rejected+reason, not fully addressed → ongoing). Remove entries resolved/rejected for more than 2 rounds.
    - `decision_log` array: for each objection responded to this round, append `{"round": N, "role": "<role>", "issue": "<issue text>", "decision": "accept/reject", "summary": "<1-2 sentence reasoning>"}`. **Growth control:** keep last 3 rounds' entries in full; for older entries, keep `round`, `role`, `issue`, and `decision` but remove `summary`.
+   - `metrics.agent_calls`: increment by the number of agent calls made this round. `metrics.sleeping_rounds_saved`: increment by the number of sleeping roles this round.
 
 **Step 3 — Progress output and convergence check**
 
@@ -417,7 +457,7 @@ a) Output this round's progress:
 b) Convergence check (purely structural rule — main Claude cannot override):
    - All **active** roles have no objection → `consecutive_no_objection += 1`
    - Any role has an objection → `consecutive_no_objection = 0`
-   - **Standard convergence**: `consecutive_no_objection >= 2` → enter Finalize
+   - **Standard convergence**: `consecutive_no_objection >= 2` AND ALL roles (including sleeping ones) have `last_reviewed_version >= proposal_version` → enter Finalize. If version check fails, wake up roles that haven't reviewed the current version and run one more round.
    - **Fast convergence** (all conditions must be met):
      1. `proposal_modified == false` for the last 2+ consecutive rounds
      2. All active roles said "No objection" this round
@@ -475,6 +515,7 @@ round += 1, continue loop.
 📝 Discussion log: proposals/proposal-<timestamp>.md
 🔄 Total rounds: N
 👥 Roles: ...
+📊 Agent calls: {metrics.agent_calls} ({sleeping_rounds_saved} sleeping rounds saved)
 ```
 
 <!-- Anti-Patterns and Pre-Release Checklist moved to docs/anti-patterns.md and docs/pre-release-checklist.md -->

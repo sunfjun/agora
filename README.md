@@ -76,6 +76,14 @@ Or configure the plugin path in your project's `.claude/settings.local.json`.
 /agora:proposal --max-rounds 5 Design a notification system
 ```
 
+### Interactive mode
+
+```
+/agora:proposal --interactive Design a caching system
+```
+
+Pauses after each round of agent feedback, letting you provide additional input, constraints, or direction before the orchestrator responds.
+
 ### Combined
 
 ```
@@ -87,8 +95,9 @@ Or configure the plugin path in your project's `.claude/settings.local.json`.
 | Parameter | Default | Description |
 |-----------|---------|-------------|
 | `--roles` | All 4 roles | Comma-separated role names |
-| `--exclude` | None | Exclude specific roles |
+| `--exclude` | None | Exclude specific roles (mutually exclusive with `--roles`) |
 | `--max-rounds` | 10 | Max discussion rounds (1-20) |
+| `--interactive` | Off | Pause after each round for user input |
 
 ### Role names
 
