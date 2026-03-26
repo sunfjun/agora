@@ -1,6 +1,6 @@
 ---
 description: Launch Agora — multi-role AI debate to generate high-quality proposals
-argument-hint: "<task description> [--roles athena,momus] [--exclude hephaestus] [--max-rounds 10] [--interactive]"
+argument-hint: "[task description] [--roles athena,momus] [--exclude hephaestus] [--max-rounds 10] [--interactive] [--resume <file>]"
 allowed-tools: [Read, Write, Edit, Glob, Grep, Agent, Bash, AskUserQuestion]
 ---
 
@@ -21,28 +21,24 @@ You are the orchestrator of Agora. Your job is to organize multiple AI roles to 
 | Momus | 🎭 | agents/momus.md |
 | Hephaestus | ⚒️ | agents/hephaestus.md |
 
-## Setup: Role Selection and Argument Parsing
+## Setup: Interactive Q&A Wizard
 
 User input: $ARGUMENTS
 
-Parse arguments (prompt-based, lenient parsing):
-- `--roles`: specify a subset of roles (comma or space separated). Example: `--roles athena,momus`
-- `--exclude`: exclude specific roles; all others participate. Mutually exclusive with `--roles` — if both are specified, error: "⚠️ --roles and --exclude cannot be used together"
-- `--max-rounds`: max discussion rounds (default 10, max 20)
-- `--interactive` (or `-i`): enable interactive mode — pause after each round of agent feedback to let the user provide input before the orchestrator responds
-- `--resume <file>`: resume a previously interrupted discussion (see Resume section below)
-- `--roles=athena,momus` (equals sign) is also valid
-- Typo tolerance: `hephae stus` → matches `hephaestus`
-- Unrecognized role name → error with list of available roles
-- 0 roles → error: "⚠️ At least 1 role is required"
+**Step 0 — Branch logic (no user interaction needed):**
 
-The remaining text after removing role arguments is the task description.
+If $ARGUMENTS contains `--resume` → skip wizard entirely, go directly to Resume section.
 
-**If `--resume` is specified, skip the rest of Setup and Initial Proposal, and go directly to Resume.**
+If $ARGUMENTS contains any content (task description and/or flags):
+- Parse flags using lenient matching: `--roles` (comma/space-separated, `--roles=` syntax also valid), `--exclude` (mutually exclusive with `--roles` — if both specified: error "⚠️ --roles and --exclude cannot be used together"), `--max-rounds` (1-20), `--interactive`/`-i`. Typo tolerance: e.g. `hephae stus` → `hephaestus`. Unrecognized role → error with available list. 0 roles → error "⚠️ At least 1 role is required".
+- Remaining text after removing flags = task description.
+- Auto-fill unspecified fields using complexity assessment below.
+- Set `roles_is_custom = true` if `--roles` or `--exclude` was provided; `rounds_is_custom = true` if `--max-rounds` was provided.
+- → **Jump directly to Q5** (skip Q1-Q4).
 
-**Auto role selection (when no `--roles` or `--exclude` is specified):**
+If $ARGUMENTS is completely empty → run full wizard: Q1 → Q2 → Q3 → Q4 → Q5.
 
-If the user did not explicitly specify roles, assess task complexity and auto-select:
+**Complexity assessment** (used for Q2 auto-recommendation and Q3 default rounds):
 
 | Complexity | Criteria | Roles | Max rounds |
 |-----------|----------|-------|------------|
@@ -50,31 +46,73 @@ If the user did not explicitly specify roles, assess task complexity and auto-se
 | Medium | Multi-module refactor, API design, moderate architecture decision | 🔮Cassandra + 🦉Athena + 🎭Momus (3) | 8 |
 | Heavy | System architecture, security-critical change, cross-team impact, large-scale migration | All 4 roles | 10 |
 
-Selection heuristics (assess from the task description):
-- **Default to Light** unless the task clearly matches Medium or Heavy criteria
-- Involves security, auth, or data privacy → must include 🎭Momus
-- Involves architecture, scalability, or long-term design → must include 🦉Athena
-- Involves implementation details, edge cases, or data handling → must include 🔮Cassandra
-- Involves feasibility, timeline, or resource constraints → must include ⚒️Hephaestus
-- When in doubt, prefer Light over Medium
+Heuristics: default to Light; security/auth/privacy → include Momus; architecture/scalability → include Athena; edge cases/data handling → include Cassandra; feasibility/timeline → include Hephaestus; when in doubt, prefer Light.
 
-Show auto-selection reasoning in the confirmation prompt so the user can override.
+**Q1 — Task description** (full wizard path only)
 
-**Output configuration confirmation — wait for user confirmation before continuing:**
+Use AskUserQuestion to ask what the user wants to discuss. Accept free-text input. No back option (Q1 is the entry point). After answer: assess complexity, initialize `roles_is_custom = false`, `rounds_is_custom = false`.
+
+**Q2 — Role configuration**
+
+Use AskUserQuestion with options (adapt option text language to match user's language):
+- "🤖 Auto-recommend ({complexity}: {role_list})" [recommended]
+- "📊 Medium — 🔮Cassandra + 🦉Athena + 🎭Momus (3 roles)"
+- "🔥 Heavy — All 4 roles"
+- "✏️ Custom (enter roles or use --exclude)"
+- "⬅️ Back: edit task description (re-run from Q1)"
+
+If "Custom" → Q2b: AskUserQuestion for role config. Accepts positive list (`athena,momus`) or exclude syntax (`--exclude cassandra` → remaining 3 roles participate). Typo tolerance; re-ask on validation failure. Provide back option to return to role mode selection. Sets `roles_is_custom = true`. Selecting auto/Medium/Heavy: sets `roles_is_custom = false`.
+
+**Q3 — Max rounds**
+
+Use AskUserQuestion with options (user may also type a number 1-20 directly; out-of-range → re-ask):
+- "3 rounds (fast)"
+- "{default_rounds} rounds ({complexity} default, recommended)" [dynamic]
+- "15 rounds"
+- "20 rounds (max)"
+- "⬅️ Back: edit roles (re-ask Q2 only)"
+
+Selecting the recommended default option: `rounds_is_custom = false`. Any other selection: `rounds_is_custom = true`.
+
+**Q4 — Interactive mode**
+
+Use AskUserQuestion with options:
+- "🤖 Auto mode — AI proceeds automatically (default)"
+- "🤝 Interactive — pause after each round for your input"
+- "⬅️ Back: edit max rounds (re-ask Q3 only)"
+
+**Q5 — Confirm configuration** (all paths converge here)
+
+Output configuration summary, then use AskUserQuestion with options:
 
 ```
-🗡️ Agora starting
-📋 Task: <task description>
-👥 Roles: <emoji+role name list> (N opus roles) {if auto-selected: "[auto: <complexity level>]"}
-🔄 Max rounds: M
-{if interactive: "🤝 Interactive mode: ON — you can provide input after each round"}
-⚠️ Estimated N×M opus Agent calls + orchestration overhead
-{if auto-selected Medium: "💡 如需可行性评估，可添加 --roles 包含 hephaestus"}
-
-Confirm? (You may adjust parameters and re-enter)
+🗡️ Agora — configuration
+────────────────────────────
+Task: {task_description}
+Roles: {emoji+names} ({N} opus roles) [auto: {complexity}] (or "custom")
+Max rounds: {max_rounds}
+Interactive: {on/off}
+Estimated: ~{N}×{max_rounds} opus calls
+────────────────────────────
 ```
 
-Wait for user confirmation before entering Initial Proposal.
+- "✅ Confirm, start discussion"
+- "📝 Edit task description" → re-ask Q1 only, then auto-recalculate and return to Q5
+- "👥 Edit roles"            → re-ask Q2 only, then auto-recalculate and return to Q5
+- "🔄 Edit max rounds"       → re-ask Q3 only, then return to Q5
+- "🤝 Edit interactive mode" → re-ask Q4 only, then return to Q5
+
+Each "Edit" option re-asks **only that single step**, then immediately returns to Q5.
+
+**Auto-recalculation on edit:**
+- After Q1 edit: re-assess complexity → if `roles_is_custom == false` update wizard.roles; if `rounds_is_custom == false` update wizard.max_rounds.
+- After Q2 edit: if `rounds_is_custom == false` update wizard.max_rounds to new complexity default.
+- After Q3/Q4 edit: no downstream recalculation needed.
+
+**Wizard state (in-memory, not persisted to file):**
+`wizard = { task_description, complexity, roles, max_rounds, interactive, roles_is_custom, rounds_is_custom }`
+
+After Q5 confirmation → proceed to Initial Proposal.
 
 ## Resume (only when `--resume` is specified)
 

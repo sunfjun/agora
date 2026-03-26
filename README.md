@@ -54,7 +54,19 @@ Or configure the plugin path in your project's `.claude/settings.local.json`.
 
 ## Usage
 
-### Basic
+### Wizard mode (recommended for new users)
+
+Invoke with no arguments to enter the interactive Q&A wizard:
+
+```
+/agora:proposal
+```
+
+The wizard guides you through task description, role selection, round limit, and interactive mode step by step. At the final confirmation screen, you can go back and edit any setting before starting.
+
+### Direct mode (recommended for experienced users)
+
+Pass arguments directly — the wizard is skipped and you jump straight to the confirmation screen:
 
 ```
 /agora:proposal Design a user authentication system
@@ -96,7 +108,7 @@ Pauses after each round of agent feedback, letting you provide additional input,
 
 | Parameter | Default | Description |
 |-----------|---------|-------------|
-| `--roles` | All 4 roles | Comma-separated role names |
+| `--roles` | auto-selected by complexity (default: Light — 🎭Momus + ⚒️Hephaestus) | Comma-separated role names |
 | `--exclude` | None | Exclude specific roles (mutually exclusive with `--roles`) |
 | `--max-rounds` | 10 | Max discussion rounds (1-20) |
 | `--interactive` | Off | Pause after each round for user input |
@@ -122,7 +134,7 @@ Each run generates two files in your project's `proposals/` directory:
 ## How it works
 
 ```
-Phase 0: Parse arguments, confirm with user
+Phase 0: Q&A wizard (or parse arguments) → confirm with user
               ↓
 Phase 1: Generate initial proposal
               ↓
